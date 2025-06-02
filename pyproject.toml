@@ -96,6 +96,7 @@ export-openvino = [
     "openvino>=2024.0.0",  # OpenVINO export
 ]
 export-tensorflow = [# tensorflow export on Windows and darwin is pretty broken, only use this on linux
+    "ultralytics[export-onnx]", # onnx is used as intermediary step before converting to tf
     "numpy<2.0.0", # TF 2.20 compatibility
     "tensorflow>=2.0.0,<=2.19.0", # TF bug https://github.com/ultralytics/ultralytics/issues/5161
     "tensorflowjs>=2.0.0", # TF.js export, automatically installs tensorflow
@@ -112,7 +113,6 @@ export-coreml = [
 export = [
     "ultralytics[export-onnx,export-openvino,export-tensorflow,export-coreml]",
 ]
-
 solutions = [
     "shapely>=2.0.0",    # shapely for point and polygon data matching
     "streamlit>=1.51.0; python_version >= '3.10'",    # for live inference on web browser, i.e `yolo streamlit-predict`
