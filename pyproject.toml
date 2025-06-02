@@ -87,14 +87,16 @@ dev = [
     "mkdocs-ultralytics-plugin>=0.2.4", # for meta descriptions and images, dates and authors
     "minijinja>=2.0.0", # render docs macros without mkdocs-macros-plugin
 ]
-export = [
-    "numpy<2.0.0", # TF 2.20 compatibility
+export-onnx = [
     "onnx>=1.12.0; platform_system != 'Darwin'", # ONNX export
-    "onnx>=1.12.0,<1.18.0; platform_system == 'Darwin'",  # TF inference hanging on MacOS (tested up to onnx==1.20.0)
-    "onnxslim>=0.1.82",
-    "coremltools>=9.0; platform_system != 'Windows' and python_version <= '3.13'", # CoreML supported on macOS and Linux
-    "scikit-learn>=1.3.2; platform_system != 'Windows' and python_version <= '3.13'", # CoreML k-means quantization
+    "onnx>=1.12.0,<1.18.0; platform_system == 'Darwin'",  # TF inference hanging on MacOS
+    "onnxslim>=0.1.82,
+]
+export-openvino = [
     "openvino>=2024.0.0",  # OpenVINO export
+]
+export-tensorflow = [# tensorflow export on Windows and darwin is pretty broken, only use this on linux
+    "numpy<2.0.0", # TF 2.20 compatibility
     "tensorflow>=2.0.0,<=2.19.0", # TF bug https://github.com/ultralytics/ultralytics/issues/5161
     "tensorflowjs>=2.0.0", # TF.js export, automatically installs tensorflow
     "ydf<0.13.0; platform_machine != 'aarch64'", # ydf>=0.13 has protobuf gencode 6.x but tensorflow<=2.19 requires protobuf<6
@@ -103,6 +105,14 @@ export = [
     "setuptools<=81.0.0",  # pin due to >=82.0.0 breaking tensorflow.js package
     "packaging>=26.0; platform_machine == 'aarch64' and platform_system == 'Linux' and python_version >= '3.9'", # IMX export bug
 ]
+export-coreml = [
+    "coremltools>=9.0; platform_system != 'Windows' and python_version <= '3.13'", # CoreML supported on macOS and Linux
+    "scikit-learn>=1.3.2; platform_system != 'Windows' and python_version <= '3.13'", # CoreML k-means quantization
+]
+export = [
+    "ultralytics[export-onnx,export-openvino,export-tensorflow,export-coreml]",
+]
+
 solutions = [
     "shapely>=2.0.0",    # shapely for point and polygon data matching
     "streamlit>=1.51.0; python_version >= '3.10'",    # for live inference on web browser, i.e `yolo streamlit-predict`
