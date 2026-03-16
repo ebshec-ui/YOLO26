@@ -88,8 +88,8 @@ dev = [
     "minijinja>=2.0.0", # render docs macros without mkdocs-macros-plugin
 ]
 export-onnx = [
-    "onnx>=1.12.0; platform_system != 'Darwin'", # ONNX export
-    "onnx>=1.12.0,<1.18.0; platform_system == 'Darwin'",  # TF inference hanging on MacOS
+    "onnx>=1.12.0,!=1.19.0; platform_system != 'Darwin'", # ONNX 1.19.0 has an issue with the ml dtypes
+    "onnx>=1.12.0,<1.18.0,!=1.19.0; platform_system == 'Darwin'",  # TF inference hanging on MacOS
     "onnxslim>=0.1.82",
 ]
 export-openvino = [
