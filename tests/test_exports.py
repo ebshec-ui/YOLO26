@@ -1,6 +1,7 @@
 # Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
 
 import io
+import os
 import shutil
 import uuid
 from contextlib import redirect_stderr, redirect_stdout
@@ -28,6 +29,88 @@ def test_export_onnx(end2end):
     """Test YOLO model export to ONNX format with dynamic axes."""
     file = YOLO(MODEL).export(format="onnx", dynamic=True, imgsz=32, end2end=end2end)
     YOLO(file)(SOURCE, imgsz=32)  # exported model inference
+
+
+def test_export_rdk_creates_deployment_package(tmp_path, monkeypatch):
+    """Test that RDK export creates the expected deployment package artifacts."""
+    import ultralytics.utils.export.rdk as rdk_export
+
+    class Args:
+        data = "coco128.yaml"
+        imgsz = (32, 32)
+
+    onnx_path = tmp_path / "yolo11n.onnx"
+    onnx_path.write_bytes(b"onnx")
+    metadata = {"names": {0: "person"}}
+
+    monkeypatch.setattr(rdk_export, "_check_rdk_export_requirements", lambda prefix: None)
+    monkeypatch.setattr(rdk_export, "_prepare_calibration_data", lambda data, cal_data_dir, imgsz: cal_data_dir.mkdir(parents=True, exist_ok=True))
+
+    calls = []
+
+    def fake_run(cmd, check, cwd):
+        calls.append((cmd, check, Path(cwd)))
+        compiler_output = Path(cwd) / "compiler_output"
+        compiler_output.mkdir(parents=True, exist_ok=True)
+        (compiler_output / "compiled.bin").write_bytes(b"bin")
+
+    monkeypatch.setattr(rdk_export.subprocess, "run", fake_run)
+
+    output_dir = rdk_export.export_rdk(
+        model=None,
+        args=Args(),
+        onnx_path=onnx_path,
+        metadata=metadata,
+        prefix="RDK:",
+    )
+
+    assert output_dir == tmp_path / "yolo11n_rdk_model"
+    assert (output_dir / "yolo11n.bin").exists()
+    assert (output_dir / "metadata.yaml").exists()
+    assert (tmp_path / ".rdk_export" / "hb_mapper_config.yaml").exists()
+    assert len(calls) == 1
+    assert calls[0][0] == ["hb_mapper", "makertbin", "--config", "hb_mapper_config.yaml", "--model-type", "onnx"]
+
+
+def test_export_rdk_requires_data_for_calibration(tmp_path, monkeypatch):
+    """Test that RDK export requires data=... for calibration input preparation."""
+    import ultralytics.utils.export.rdk as rdk_export
+
+    class Args:
+        data = None
+        imgsz = (32, 32)
+
+    onnx_path = tmp_path / "yolo11n.onnx"
+    onnx_path.write_bytes(b"onnx")
+
+    monkeypatch.setattr(rdk_export, "_check_rdk_export_requirements", lambda prefix: None)
+
+    with pytest.raises(ValueError, match=r"data=.*calibration"):
+        rdk_export.export_rdk(
+            model=None,
+            args=Args(),
+            onnx_path=onnx_path,
+            metadata={"names": {0: "person"}},
+            prefix="RDK:",
+        )
+
+
+@pytest.mark.skipif(
+    not (
+        LINUX
+        and not ARM64
+        and shutil.which("hb_mapper")
+        and os.environ.get("ULTRALYTICS_RUN_RDK_TESTS") == "1"
+    ),
+    reason="Requires x86_64 Linux with hb_mapper available and ULTRALYTICS_RUN_RDK_TESTS=1.",
+)
+def test_export_rdk_real_environment():
+    """Test RDK export in a real toolchain environment when explicitly enabled."""
+    file = YOLO(MODEL).export(format="rdk", imgsz=32, data=TASK2DATA["detect"])
+    file = Path(file)
+    assert file.is_dir()
+    assert (file / f"{Path(MODEL).stem}.bin").exists()
+    assert (file / "metadata.yaml").exists()
 
 
 @pytest.mark.skipif(not TORCH_2_1, reason="OpenVINO requires torch>=2.1")
