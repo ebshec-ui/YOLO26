@@ -171,7 +171,7 @@ def export_formats():
         ["CoreML", "coreml", ".mlpackage", True, False, ["batch", "dynamic", "half", "int8", "nms"]],
         ["TensorFlow SavedModel", "saved_model", "_saved_model", True, True, ["batch", "int8", "keras", "nms"]],
         ["TensorFlow GraphDef", "pb", ".pb", True, True, ["batch"]],
-        ["TensorFlow Lite", "tflite", ".tflite", True, False, ["batch", "half", "int8", "nms", "fraction"]],
+        ["TensorFlow Lite", "tflite", ".tflite", True, False, ["batch", "half", "int8", "uint8", "nms", "fraction"]],
         ["TensorFlow Edge TPU", "edgetpu", "_edgetpu.tflite", True, False, []],
         ["TensorFlow.js", "tfjs", "_web_model", True, False, ["batch", "half", "int8", "nms"]],
         ["PaddlePaddle", "paddle", "_paddle_model", True, True, ["batch"]],
@@ -226,7 +226,7 @@ def validate_args(format, passed_args, valid_args):
     Raises:
         AssertionError: If an unsupported argument is used, or if the format lacks supported argument listings.
     """
-    export_args = ["half", "int8", "dynamic", "keras", "nms", "batch", "fraction"]
+    export_args = ["half", "int8", "uint8", "dynamic", "keras", "nms", "batch", "fraction"]
 
     assert valid_args is not None, f"ERROR ❌️ valid arguments for '{format}' not listed."
     custom = {"batch": 1, "data": None, "device": None}  # exporter defaults
@@ -282,6 +282,7 @@ class Exporter:
     Methods:
         __call__: Main export method that handles the export process.
         get_int8_calibration_dataloader: Build dataloader for INT8 calibration.
+        get_uint8_calibration_dataloader: Build dataloader for UINT8 calibration.
         export_torchscript: Export model to TorchScript format.
         export_onnx: Export model to ONNX format.
         export_openvino: Export model to OpenVINO format.
@@ -435,9 +436,15 @@ class Exporter:
                         )
                 except ImportError:
                     pass
-        if self.args.half and self.args.int8:
-            LOGGER.warning("half=True and int8=True are mutually exclusive, setting half=False.")
-            self.args.half = False
+        if (sum(map(bool, (self.args.uint8, self.args.int8, self.args.half))) > 1): # if more than 1 is set to True
+            assert (sum(map(bool, (self.args.uint8, self.args.int8))) <= 1), "int8=True and uint8=True are mutually exclusive, please decide which one"
+            if self.args.int8 and self.args.half:
+                LOGGER.warning("half=True and int8=True are mutually exclusive, setting half=False.")
+                self.args.half = False
+            if self.args.uint8 and self.args.half:
+                LOGGER.warning("half=True and uint8=True are mutually exclusive, setting half=False.")
+                self.args.half = False
+
         if self.args.half and jit and self.device.type == "cpu":
             LOGGER.warning(
                 "half=True only compatible with GPU export for TorchScript, i.e. use device=0, setting half=False."
@@ -658,9 +665,9 @@ class Exporter:
         self.run_callbacks("on_export_end")
         return f  # path to final export artifact
 
-    def get_int8_calibration_dataloader(self, prefix=""):
-        """Build and return a dataloader for calibration of INT8 models."""
-        LOGGER.info(f"{prefix} collecting INT8 calibration images from 'data={self.args.data}'")
+    def _get_calibration_dataloader(self, quantization_type="INT8", prefix=""):
+        """Build and return a dataloader for calibration of quantized models."""
+        LOGGER.info(f"{prefix} collecting {quantization_type} calibration images from 'data={self.args.data}'")
         data = (check_cls_dataset if self.model.task == "classify" else check_det_dataset)(self.args.data)
         dataset = YOLODataset(
             data[self.args.split or "val"],
@@ -682,8 +689,16 @@ class Exporter:
         if self.args.format == "axelera" and n < 100:
             LOGGER.warning(f"{prefix} >100 images required for Axelera calibration, found {n} images.")
         elif self.args.format != "axelera" and n < 300:
-            LOGGER.warning(f"{prefix} >300 images recommended for INT8 calibration, found {n} images.")
+            LOGGER.warning(f"{prefix} >300 images recommended for {quantization_type} calibration, found {n} images.")
         return build_dataloader(dataset, batch=batch, workers=0, drop_last=True)  # required for batch loading
+
+    def get_int8_calibration_dataloader(self, prefix=""):
+        """Build and return a dataloader for calibration of INT8 models."""
+        return self._get_calibration_dataloader(quantization_type="INT8", prefix=prefix)
+
+    def get_uint8_calibration_dataloader(self, prefix=""):
+        """Build and return a dataloader for calibration of UINT8 models."""
+        return self._get_calibration_dataloader(quantization_type="UINT8", prefix=prefix)
 
     @try_export
     def export_torchscript(self, prefix=colorstr("TorchScript:")):
@@ -1105,8 +1120,14 @@ class Exporter:
 
         # Export to TF
         images = None
-        if self.args.int8 and self.args.data:
-            images = [batch["img"] for batch in self.get_int8_calibration_dataloader(prefix)]
+        calibration_dataloader_fn = None
+        if self.args.data:
+            if self.args.int8:
+                calibration_dataloader_fn = self.get_int8_calibration_dataloader
+            elif self.args.uint8:
+                calibration_dataloader_fn = self.get_uint8_calibration_dataloader
+        if calibration_dataloader_fn:
+            images = [batch["img"] for batch in calibration_dataloader_fn(prefix)]
             images = (
                 torch.nn.functional.interpolate(torch.cat(images, 0).float(), size=self.imgsz)
                 .permute(0, 2, 3, 1)
@@ -1124,6 +1145,7 @@ class Exporter:
             f_onnx,
             f,
             int8=self.args.int8,
+            uint8=self.args.uint8,
             images=images,
             disable_group_convolution=self.args.format in {"tfjs", "edgetpu"},
             prefix=prefix,
@@ -1152,6 +1174,8 @@ class Exporter:
         saved_model = Path(str(self.file).replace(self.file.suffix, "_saved_model"))
         if self.args.int8:
             f = saved_model / f"{self.file.stem}_int8.tflite"  # fp32 in/out
+        elif self.args.uint8:
+            f = saved_model / f"{self.file.stem}_uint8.tflite"  # fp32 in/out
         elif self.args.half:
             f = saved_model / f"{self.file.stem}_float16.tflite"  # fp32 in/out
         else:
